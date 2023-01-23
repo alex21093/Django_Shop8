@@ -1,0 +1,109 @@
+services:
+
+  db:
+    image: postgres:14.5
+    restart: always
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
+    environment:
+      - DJANGO_SETTINGS_MODULE=myshop.settings.prod
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+
+  redis:
+    image: redis:7.0.4
+    restart: always
+    volumes:
+      - ./data/cache:/data
+
+  web:
+    build: .
+    command: ["./wait-for-it.sh", "db:5432", "--", "uwsgi", "--ini", "/code/config/uwsgi/uwsgi.ini"]
+    restart: always
+    volumes:
+      - .:/code
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+
+      - STRIPE_PUBLIC_KEY='pk_test_XXXX'
+      - STRIPE_SECRET_KEY='sk_test_XXXXX'
+      - DJSTRIPE_TEST_WEBHOOK_SECRET='XXXX'
+      - DJSTRIPE_TEST_DB_VENDOR=postgres
+      - DJSTRIPE_TEST_DB_PORT=5432
+      - DJSTRIPE_TEST_DB_USER=postgres
+      - DJSTRIPE_TEST_DB_NAME=random_number
+      - DJSTRIPE_TEST_DB_PASS=random_number
+      - DJSTRIPE_TEST_DB_HOST=db
+
+     
+
+    depends_on:
+      - db
+      - redis
+      - stripe-cli
+      
+  celery:
+    restart: always
+    working_dir: /code/myshop/
+    build:
+      context: .
+    command: celery -A myshop worker -l info
+    volumes:
+      - .:/myshop
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    links:
+            - rabbitmq3
+    #env_file:
+    #  - ./.env
+    depends_on:
+      - web
+      - rabbitmq3
+
+  flower:
+    restart: always
+    working_dir: /code/myshop/
+    build:
+      context: .
+    command: celery -A myshop flower
+    volumes:
+      - .:/myshop
+    links:
+            - celery
+    depends_on:
+      - celery
+      - rabbitmq3
+  
+  rabbitmq3:
+    restart: always
+    container_name: "rabbitmq"
+    image: rabbitmq:3-management
+    hostname: my-rabbit
+    environment:
+            - RABBITMQ_DEFAULT_USER=guest
+            - RABBITMQ_DEFAULT_PASS=guest
+    ports:
+      - 5672:5672
+      - 15672:15672
+
+  stripe-cli:
+    image: stripe/stripe-cli
+    restart: always
+    container_name: stripe-cli
+    command: "listen --api-key sk_test_XXXXXXX --device-name djstripe_docker --forward-to localhost:8000/payment/webhook/"
+    env_file:
+      - stripe_cli.env
+
+  nginx:
+    image: nginx:1.23.1
+    restart: always
+    volumes:
+      - ./config/nginx:/etc/nginx/templates
+      - .:/code
+    ports:
+      - "80:80"
